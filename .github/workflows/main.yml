@@ -1,6 +1,6 @@
-import 'dart:convert';
-import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
+import 'dart:convert'
+import 'package:flutter/material.dart'
+import 'package:http/http.dart'as' http';
 
 const backendUrl = 'https://YOUR-BACKEND-URL/chat';
 const modes = {'normal': '🤖 DarkGPT AI', 'deep': '🧠 Deep Thinking', 'negative': '⚫ Negative Thinking',
