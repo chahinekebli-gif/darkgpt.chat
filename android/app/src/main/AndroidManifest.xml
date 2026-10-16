@@ -1,6 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    package="com.chat.darkgbt">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"/>
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"/>
@@ -8,7 +7,8 @@
     <application
         android:requestLegacyExternalStorage="true"
         android:label="darkgpt.chat"
-        android:icon="@drawable/ic_launcher">
+        android:icon="@drawable/ic_launcher"
+        android:theme="@style/NormalTheme">
         <activity
             android:name=".MainActivity"
             android:exported="true"
