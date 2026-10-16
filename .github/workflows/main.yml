@@ -190,7 +190,7 @@ class ChatPage extends StatefulWidget {
   State<ChatPage> createState() => _ChatPageState();
 }
 
-class _ChatPageState extends State<ChatPage> 
+class _ChatPageState extends State<ChatPage> {}
   static const _chatKey = 'ai_chat_v1';
   static const _settingsKey = 'ai_settings_v1';
 
@@ -201,12 +201,7 @@ class _ChatPageState extends State<ChatPage>
   bool _loading = true;
   bool _sending = false;
 
-  static const _suggestions = [
-    'اشرح لي مفهوم الذكاء الاصطناعي ببساطة',
-    'اكتب لي كود Flutter لشاشة تسجيل دخول',
-    'ساعدني في وضع خطة لتعلم البرمجة',
-    'كيف أصلح خطأ في تطبيق Android Studio؟',
-  ];
+  static const _suggestions { }
 
   @override
   void initState() {
@@ -599,25 +594,17 @@ class _ChatPageState extends State<ChatPage>
     );
   }
 
-  Widget _buildBubble(Msg m) 
+  Widget _buildBubble(Msg m) {}
     final isUser = m.role == 'user';
-    return Align
+    return Align()
       alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
-      child: GestureDetector(
-        onTap: () {
-          
-        },
-        child: const SizedBox(),
-      )
-        onLongPress: {
+      child: GestureDetector()
+        onLongPress: () {}
           Clipboard.setData(ClipboardData(text: m.text));
           HapticFeedback.selectionClick();
           _showSnack('تم النسخ');
-        },
-        child: Container(
-          padding: const EdgeInsets.all(8.0),
-          child: ,
-        )
+        {},
+        child: Container()
           constraints:
               BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.85),
           margin: const EdgeInsets.symmetric(vertical: 4),
