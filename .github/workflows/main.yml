@@ -1,103 +1,617 @@
-import 'dart:convert'
-import 'package:flutter/material.dart'
-import 'package:http/http.dart'as' http';
+import 'dart:convert';
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
 
-const backendUrl = 'https://YOUR-BACKEND-URL/chat';
-const modes = {'normal': '🤖 DarkGPT AI', 'deep': '🧠 Deep Thinking', 'negative': '⚫ Negative Thinking',
-  'coding': '💻 Coding AI', 'cybersecurity': '🛡️ Cybersecurity'};
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  runApp(const AiApp());
+}
 
-void main() => runApp(MaterialApp(
-      debugShowCheckedModeBanner: false,
-      theme: ThemeData(useMaterial3: true, brightness: Brightness.dark, scaffoldBackgroundColor: const Color(0xFF090B10)),
-      builder: (c, w) => Directionality(textDirection: TextDirection.rtl, child: w!),
-      home: const Chat(),
-    ));
+// ───────────────────────── Theme (same style as your app) ─────────────────────────
+class AppTheme {
+  static const Color background = Color(0xFF0D1117);
+  static const Color surface = Color(0xFF161B22);
+  static const Color surfaceAlt = Color(0xFF21262D);
+  static const Color border = Color(0xFF30363D);
+  static const Color primary = Color(0xFF1F6FEB);
+  static const Color primaryLight = Color(0xFF58A6FF);
+  static const Color success = Color(0xFF2EA043);
+  static const Color danger = Color(0xFFCF222E);
+  static const Color warning = Color(0xFFD29922);
+  static const Color textPrimary = Color(0xFFE6EDF3);
+  static const Color textMuted = Color(0xFF8B949E);
 
+  static ThemeData get dark => ThemeData(
+        useMaterial3: true,
+        brightness: Brightness.dark,
+        scaffoldBackgroundColor: background,
+        colorScheme: const ColorScheme.dark(
+          primary: primary,
+          secondary: primaryLight,
+          surface: surface,
+          error: danger,
+          onPrimary: Colors.white,
+          onSurface: textPrimary,
+        ),
+        appBarTheme: const AppBarTheme(
+          backgroundColor: background,
+          elevation: 0,
+          centerTitle: true,
+          titleTextStyle: TextStyle(
+              color: textPrimary, fontSize: 20, fontWeight: FontWeight.bold),
+        ),
+        inputDecorationTheme: InputDecorationTheme(
+          filled: true,
+          fillColor: surfaceAlt,
+          contentPadding:
+              const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(14),
+            borderSide: const BorderSide(color: border),
+          ),
+          enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(14),
+            borderSide: const BorderSide(color: border),
+          ),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(14),
+            borderSide: const BorderSide(color: primaryLight, width: 1.5),
+          ),
+        ),
+      );
+}
+
+// ───────────────────────── Models ─────────────────────────
 class Msg {
-  final String text;
-  final bool user, error;
-  Msg(this.text, {this.user = false, this.error = false});
+  final String role; // 'user' | 'assistant'
+  String text;
+  final DateTime createdAt;
+  Msg({required this.role, required this.text, DateTime? createdAt})
+      : createdAt = createdAt ?? DateTime.now();
+
+  Map<String, dynamic> toJson() =>
+      {'role': role, 'text': text, 'createdAt': createdAt.toIso8601String()};
+
+  factory Msg.fromJson(Map<String, dynamic> j) => Msg(
+        role: j['role'] as String,
+        text: j['text'] as String,
+        createdAt: DateTime.parse(j['createdAt'] as String),
+      );
 }
 
-class Chat extends StatefulWidget {
-  const Chat({super.key});
+class Settings {
+  String apiKey;
+  String baseUrl;
+  String model;
+  bool deepThinking;
+  Settings({
+    this.apiKey = '',
+    this.baseUrl = 'https://api.openai.com/v1/chat/completions',
+    this.model = 'gpt-4o',
+    this.deepThinking = true,
+  });
+
+  Map<String, dynamic> toJson() => {
+        'apiKey': apiKey,
+        'baseUrl': baseUrl,
+        'model': model,
+        'deepThinking': deepThinking,
+      };
+
+  factory Settings.fromJson(Map<String, dynamic> j) => Settings(
+        apiKey: j['apiKey'] as String? ?? '',
+        baseUrl: j['baseUrl'] as String? ??
+            'https://api.openai.com/v1/chat/completions',
+        model: j['model'] as String? ?? 'gpt-4o',
+        deepThinking: j['deepThinking'] as bool? ?? true,
+      );
+}
+
+// ───────────────────────── AI Service ─────────────────────────
+class AiService {
+  // Professional thinking: a strong system prompt that forces structured reasoning.
+  static const String _basePrompt =
+      'أنت مساعد ذكاء اصطناعي محترف. أجب بنفس لغة المستخدم. '
+      'كن دقيقًا وصادقًا، ولا تخترع معلومات؛ إن لم تكن متأكدًا فاذكر ذلك.';
+
+  static const String _deepPrompt =
+      'قبل الإجابة فكّر بطريقة منهجية:\n'
+      '1) افهم المطلوب بدقة وحدد الافتراضات.\n'
+      '2) قسّم المشكلة إلى خطوات صغيرة.\n'
+      '3) ادرس أكثر من حل وقارن بينها.\n'
+      '4) راجع إجابتك بحثًا عن أخطاء قبل إرسالها.\n'
+      'ثم قدّم إجابة منظمة وواضحة، وعند كتابة الكود اجعله كاملًا وجاهزًا للتشغيل '
+      'مع شرح مختصر.';
+
+  static Future<String> send(Settings s, List<Msg> history) async {
+    if (s.apiKey.trim().isEmpty) {
+      throw Exception('أدخل مفتاح API من الإعدادات أولًا');
+    }
+    final messages = <Map<String, String>>[
+      {
+        'role': 'system',
+        'content': s.deepThinking ? '$_basePrompt\n$_deepPrompt' : _basePrompt,
+      },
+      // keep last 20 messages to control cost
+      ...history
+          .skip(history.length > 20 ? history.length - 20 : 0)
+          .map((m) => {'role': m.role, 'content': m.text}),
+    ];
+
+    final res = await http
+        .post(
+          Uri.parse(s.baseUrl),
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer ${s.apiKey.trim()}',
+          },
+          body: jsonEncode({
+            'model': s.model,
+            'messages': messages,
+            'temperature': s.deepThinking ? 0.3 : 0.7,
+          }),
+        )
+        .timeout(const Duration(seconds: 90));
+
+    if (res.statusCode != 200) {
+      String detail = res.body;
+      try {
+        detail = jsonDecode(utf8.decode(res.bodyBytes))['error']['message']
+            .toString();
+      } catch (_) {}
+      throw Exception('خطأ ${res.statusCode}: $detail');
+    }
+    final data = jsonDecode(utf8.decode(res.bodyBytes));
+    return (data['choices'][0]['message']['content'] as String).trim();
+  }
+}
+
+// ───────────────────────── App ─────────────────────────
+class AiApp extends StatelessWidget {
+  const AiApp({super.key});
+
   @override
-  State<Chat> createState() => _ChatState();
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: 'مساعد ذكي',
+      debugShowCheckedModeBanner: false,
+      theme: AppTheme.dark,
+      home: const ChatPage(),
+    );
+  }
 }
 
-class _ChatState extends State<Chat> {
-  final input = TextEditingController(), scroll = ScrollController();
-  final msgs = <Msg>[];
-  String mode = 'normal';
-  bool loading = false;
+class ChatPage extends StatefulWidget {
+  const ChatPage({super.key});
 
-  Future<void> send() async {
-    final text = input.text.trim();
-    if (text.isEmpty || loading) return;
-    final history = msgs.where((m) => !m.error).map((m) => {'role': m.user ? 'user' : 'assistant', 'content': m.text}).toList();
-    input.clear();
-    setState(() { msgs.add(Msg(text, user: true)); loading = true; });
+  @override
+  State<ChatPage> createState() => _ChatPageState();
+}
+
+class _ChatPageState extends State<ChatPage> {
+  static const _chatKey = 'ai_chat_v1';
+  static const _settingsKey = 'ai_settings_v1';
+
+  final List<Msg> _messages = [];
+  final TextEditingController _input = TextEditingController();
+  final ScrollController _scroll = ScrollController();
+  Settings _settings = Settings();
+  bool _loading = true;
+  bool _sending = false;
+
+  static const _suggestions = [
+    'اشرح لي مفهوم الذكاء الاصطناعي ببساطة',
+    'اكتب لي كود Flutter لشاشة تسجيل دخول',
+    'ساعدني في وضع خطة لتعلم البرمجة',
+    'كيف أصلح خطأ في تطبيق Android Studio؟',
+  ];
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  @override
+  void dispose() {
+    _input.dispose();
+    _scroll.dispose();
+    super.dispose();
+  }
+
+  Future<void> _load() async {
     try {
-      final r = await http.post(Uri.parse(backendUrl), headers: {'Content-Type': 'application/json'},
-          body: jsonEncode({'message': text, 'mode': mode, 'history': history})).timeout(const Duration(seconds: 90));
-      if (r.statusCode ~/ 100 != 2) throw Exception(r.statusCode);
-      final d = jsonDecode(utf8.decode(r.bodyBytes));
-      final a = (d['reply'] ?? d['message'] ?? d['response'] ?? 'لم يرجع الخادم إجابة.').toString();
-      if (mounted) setState(() => msgs.add(Msg(a)));
-    } catch (_) {
-      if (mounted) setState(() => msgs.add(Msg('تعذر الاتصال بالخادم. تأكد من الرابط.', error: true)));
+      final prefs = await SharedPreferences.getInstance();
+      final chat = prefs.getString(_chatKey);
+      if (chat != null && chat.isNotEmpty) {
+        final list = jsonDecode(chat) as List<dynamic>;
+        _messages.addAll(
+            list.map((e) => Msg.fromJson(e as Map<String, dynamic>)));
+      }
+      final st = prefs.getString(_settingsKey);
+      if (st != null && st.isNotEmpty) {
+        _settings = Settings.fromJson(jsonDecode(st) as Map<String, dynamic>);
+      }
+    } catch (_) {}
+    setState(() => _loading = false);
+    _scrollToEnd();
+  }
+
+  Future<void> _saveChat() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(
+          _chatKey, jsonEncode(_messages.map((m) => m.toJson()).toList()));
+    } catch (_) {}
+  }
+
+  Future<void> _saveSettings() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_settingsKey, jsonEncode(_settings.toJson()));
+    } catch (_) {}
+  }
+
+  void _scrollToEnd() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_scroll.hasClients) {
+        _scroll.animateTo(
+          _scroll.position.maxScrollExtent,
+          duration: const Duration(milliseconds: 300),
+          curve: Curves.easeOut,
+        );
+      }
+    });
+  }
+
+  Future<void> _send([String? preset]) async {
+    final text = (preset ?? _input.text).trim();
+    if (text.isEmpty || _sending) return;
+    _input.clear();
+    HapticFeedback.lightImpact();
+    setState(() {
+      _messages.add(Msg(role: 'user', text: text));
+      _sending = true;
+    });
+    _saveChat();
+    _scrollToEnd();
+
+    try {
+      final reply = await AiService.send(_settings, _messages);
+      setState(() => _messages.add(Msg(role: 'assistant', text: reply)));
+    } catch (e) {
+      _showSnack(e.toString().replaceFirst('Exception: ', ''), error: true);
     } finally {
-      if (mounted) setState(() => loading = false);
-      WidgetsBinding.instance.addPostFrameCallback((_) { if (scroll.hasClients) scroll.jumpTo(scroll.position.maxScrollExtent); });
+      if (mounted) setState(() => _sending = false);
+      _saveChat();
+      _scrollToEnd();
     }
   }
 
-  Widget bubble(Msg m) => Align(
-        alignment: m.user ? AlignmentDirectional.centerStart : AlignmentDirectional.centerEnd,
-        child: Container(
-          constraints: BoxConstraints(maxWidth: MediaQuery.sizeOf(context).width * .88),
-          margin: const EdgeInsets.only(bottom: 12),
-          padding: const EdgeInsets.all(15),
-          decoration: BoxDecoration(borderRadius: BorderRadius.circular(18),
-              color: m.user ? const Color(0xFF367BD6) : m.error ? const Color(0xFF3A1A1F) : const Color(0xFF151820)),
-          child: SelectableText(m.text, style: const TextStyle(fontSize: 16, height: 1.5)),
-        ),
-      );
+  void _clearChat() {
+    if (_messages.isEmpty) return;
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppTheme.surface,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+        title: const Text('مسح المحادثة',
+            style: TextStyle(color: AppTheme.textPrimary)),
+        content: const Text('سيتم حذف كل الرسائل. لا يمكن التراجع.',
+            style: TextStyle(color: AppTheme.textMuted)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('إلغاء',
+                style: TextStyle(color: AppTheme.textMuted)),
+          ),
+          TextButton(
+            onPressed: () {
+              setState(() => _messages.clear());
+              _saveChat();
+              Navigator.pop(ctx);
+            },
+            child: const Text('تأكيد',
+                style: TextStyle(
+                    color: AppTheme.danger, fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
+  }
 
-  @override
-  Widget build(BuildContext context) => Scaffold(
-        appBar: AppBar(
-          backgroundColor: const Color(0xFF222222),
-          title: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            const Text('darkgpt.chat', style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
-            Text(modes[mode]!, style: const TextStyle(fontSize: 11, color: Colors.grey)),
-          ]),
-          actions: [
-            IconButton(icon: const Icon(Icons.add), onPressed: () => setState(() { msgs.clear(); mode = 'normal'; })),
-            PopupMenuButton<String>(icon: const Icon(Icons.tune), onSelected: (v) => setState(() => mode = v),
-                itemBuilder: (_) => [for (final e in modes.entries) PopupMenuItem(value: e.key, child: Text(e.value))]),
+  void _showSnack(String message, {bool error = false}) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).clearSnackBars();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Row(
+          children: [
+            Icon(
+              error ? Icons.error_outline_rounded : Icons.check_circle_rounded,
+              color: error ? AppTheme.danger : AppTheme.success,
+              size: 20,
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(message,
+                  style: const TextStyle(color: AppTheme.textPrimary)),
+            ),
           ],
         ),
-        body: Column(children: [
-          Expanded(
-            child: ListView.builder(
-              controller: scroll, padding: const EdgeInsets.all(14), itemCount: msgs.length + (loading ? 1 : 0),
-              itemBuilder: (_, i) => i == msgs.length ? const Padding(padding: EdgeInsets.all(12), child: Text('AI يفكر...')) : bubble(msgs[i]),
-            ),
+        backgroundColor: AppTheme.surfaceAlt,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        margin: const EdgeInsets.all(16),
+        duration: const Duration(seconds: 4),
+      ),
+    );
+  }
+
+  void _openSettings() {
+    final key = TextEditingController(text: _settings.apiKey);
+    final url = TextEditingController(text: _settings.baseUrl);
+    final model = TextEditingController(text: _settings.model);
+    bool deep = _settings.deepThinking;
+
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setD) => AlertDialog(
+          backgroundColor: AppTheme.surface,
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+          title: const Row(
+            children: [
+              Icon(Icons.settings_rounded, color: AppTheme.primaryLight),
+              SizedBox(width: 10),
+              Text('الإعدادات',
+                  style: TextStyle(color: AppTheme.textPrimary)),
+            ],
           ),
-          SafeArea(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(12, 8, 12, 10),
-              child: Row(children: [
-                Expanded(
-                  child: TextField(controller: input, minLines: 1, maxLines: 6,
-                      decoration: InputDecoration(hintText: 'اكتب رسالتك...', filled: true, fillColor: const Color(0xFF17191F),
-                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(22), borderSide: BorderSide.none))),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: key,
+                  obscureText: true,
+                  style: const TextStyle(color: AppTheme.textPrimary),
+                  decoration: const InputDecoration(
+                    hintText: 'مفتاح API',
+                    prefixIcon: Icon(Icons.key_rounded),
+                  ),
                 ),
-                IconButton(icon: const Icon(Icons.arrow_upward, color: Color(0xFF367BD6)), onPressed: loading ? null : send),
-              ]),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: url,
+                  style: const TextStyle(color: AppTheme.textPrimary),
+                  decoration: const InputDecoration(
+                    hintText: 'رابط الخدمة',
+                    prefixIcon: Icon(Icons.link_rounded),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: model,
+                  style: const TextStyle(color: AppTheme.textPrimary),
+                  decoration: const InputDecoration(
+                    hintText: 'اسم النموذج',
+                    prefixIcon: Icon(Icons.memory_rounded),
+                  ),
+                ),
+                const SizedBox(height: 6),
+                SwitchListTile(
+                  value: deep,
+                  activeColor: AppTheme.primaryLight,
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('التفكير الاحترافي',
+                      style: TextStyle(color: AppTheme.textPrimary)),
+                  subtitle: const Text('تحليل خطوة بخطوة ومراجعة الإجابة',
+                      style:
+                          TextStyle(color: AppTheme.textMuted, fontSize: 12)),
+                  onChanged: (v) => setD(() => deep = v),
+                ),
+              ],
             ),
           ),
-        ]),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('إلغاء',
+                  style: TextStyle(color: AppTheme.textMuted)),
+            ),
+            FilledButton(
+              onPressed: () {
+                setState(() {
+                  _settings = Settings(
+                    apiKey: key.text.trim(),
+                    baseUrl: url.text.trim(),
+                    model: model.text.trim(),
+                    deepThinking: deep,
+                  );
+                });
+                _saveSettings();
+                Navigator.pop(ctx);
+                _showSnack('تم حفظ الإعدادات');
+              },
+              style: FilledButton.styleFrom(backgroundColor: AppTheme.primary),
+              child: const Text('حفظ'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ───────────────────────── UI ─────────────────────────
+  @override
+  Widget build(BuildContext context) {
+    if (_loading) {
+      return const Scaffold(
+        body: Center(
+            child: CircularProgressIndicator(color: AppTheme.primaryLight)),
       );
-}
+    }
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('مساعد ذكي'),
+        actions: [
+          IconButton(
+            tooltip: 'مسح المحادثة',
+            icon: const Icon(Icons.delete_sweep_rounded),
+            onPressed: _clearChat,
+          ),
+          IconButton(
+            tooltip: 'الإعدادات',
+            icon: const Icon(Icons.settings_rounded),
+            onPressed: _openSettings,
+          ),
+        ],
+      ),
+      body: Column(
+        children: [
+          _buildHeader(),
+          Expanded(
+            child: _messages.isEmpty ? _buildEmptyState() : _buildMessages(),
+          ),
+          if (_sending) _buildTyping(),
+          _buildInputBar(),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildHeader() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+      child: Container(
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          gradient: const LinearGradient(
+            colors: [Color(0xFF1F6FEB), Color(0xFF0D419D)],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          ),
+          borderRadius: BorderRadius.circular(20),
+          boxShadow: [
+            BoxShadow(
+              color: AppTheme.primary.withOpacity(0.3),
+              blurRadius: 16,
+              offset: const Offset(0, 6),
+            ),
+          ],
+        ),
+        child: Row(
+          children: [
+            const Icon(Icons.psychology_rounded, color: Colors.white, size: 30),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('تفكير احترافي',
+                      style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold)),
+                  Text(
+                    _settings.deepThinking
+                        ? 'مفعّل: تحليل خطوة بخطوة'
+                        : 'متوقف: ردود سريعة',
+                    style:
+                        const TextStyle(color: Colors.white70, fontSize: 12),
+                  ),
+                ],
+              ),
+            ),
+            Switch(
+              value: _settings.deepThinking,
+              activeColor: Colors.white,
+              onChanged: (v) {
+                setState(() => _settings.deepThinking = v);
+                _saveSettings();
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildEmptyState() {
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        const SizedBox(height: 20),
+        const Icon(Icons.auto_awesome_rounded,
+            size: 64, color: AppTheme.primaryLight),
+        const SizedBox(height: 12),
+        const Center(
+          child: Text('كيف أساعدك اليوم؟',
+              style: TextStyle(
+                  color: AppTheme.textPrimary,
+                  fontSize: 20,
+                  fontWeight: FontWeight.bold)),
+        ),
+        const SizedBox(height: 24),
+        ..._suggestions.map(
+          (s) => Padding(
+            padding: const EdgeInsets.symmetric(vertical: 4),
+            child: InkWell(
+              borderRadius: BorderRadius.circular(14),
+              onTap: () => _send(s),
+              child: Container(
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: AppTheme.surface,
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: AppTheme.border),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.lightbulb_outline_rounded,
+                        color: AppTheme.warning, size: 20),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(s,
+                          style:
+                              const TextStyle(color: AppTheme.textPrimary)),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildMessages() {
+    return ListView.builder(
+      controller: _scroll,
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+      itemCount: _messages.length,
+      itemBuilder: (_, i) => _buildBubble(_messages[i]),
+    );
+  }
+
+  Widget _buildBubble(Msg m) {
+    final isUser = m.role == 'user';
+    return Align(
+      alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
+      child: GestureDetector(
+        onLongPress: () {
+          Clipboard.setData(ClipboardData(text: m.text));
+          HapticFeedback.selectionClick();
+          _showSnack('تم النسخ');
+        },
+        child: Container(
+          constraints:
+              BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.85),
+          margin: const EdgeInsets.symmetric(vertical: 4),
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDe
