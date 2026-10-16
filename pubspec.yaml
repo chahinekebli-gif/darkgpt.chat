@@ -1,15 +1,16 @@
-name: darkgpt
-description: A new 
-   Flutter project.
-publish_to: 'none'
+
+name: darkgpt.chat
+description: DarkGPT.Chat Application
+publish_to: "none"
 version: 1.0.0+1
 
 environment:
-  sdk: '>=2.17.0 <4.0.0'
+  sdk: '>=3.3.0 <4.0.0'
 
 dependencies:
   flutter:
-    sdk: flutter
+    sdk= flutter
+  http: ^1.2.2
 
 flutter:
   uses-material-design: true
