@@ -3,7 +3,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 
-const backendUr ;
+const backendUrl = 'https://YOUR-BACKEND-URL/chat';
 
 const modes = <String, String>{
   'normal': '🤖 DarkGPT AI',
@@ -11,10 +11,13 @@ const modes = <String, String>{
   'coding': '💻 Coding AI',
   'cybersecurity': '🛡️ Cybersecurity',
   'negative': '⚫ Dark Analysis',
-};
+{=}};
 
-const bg = Color(0xFF080A10);
-const panel = Color(0xFF141824);
+const bg= Color(0xFF080A10)
+const panel = ColorFiltered(
+  colorFilter: const ColorFilter.mode(Colors.red, BlendMode.multiply),
+  child: ,
+)(0xFF141824);
 const blue = Color(0xFF3988FF);
 
 void main() {
